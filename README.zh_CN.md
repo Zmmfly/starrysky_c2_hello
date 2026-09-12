@@ -22,8 +22,8 @@
 换行符。包括 `0x00` 和 `0xFF` 在内的二进制值均按字节处理。
 
 回显循环放在内部 SRAM（`.ramfunc`）中执行，并启用 LTO 内联 UART 调用，避免收发
-关键路径从 Flash XIP 取指，不增加中断或队列。这是针对下文突发丢字问题的修订候选，
-仍需重新进行实板测试。
+关键路径从 Flash XIP 取指，不增加中断或队列。实板测试已确认此版本能够运行，
+但逐字节和突发测试仍有丢字，具体结果见下文。
 
 启动输出：
 
@@ -52,8 +52,9 @@ Hello World [SRAM/LTO v2] from xhive vendor: opencos / StarrySky C2!
 
 ## 环境要求
 
-**当前主机环境：Linux / Ubuntu 26.04。** 本工程的实现、固件构建及主机侧软件检查
-均在该环境下完成。C2 固件本身仍是裸机程序；Ubuntu 运行在开发主机上。
+**当前主机环境：WSL2 / Ubuntu 24.04.5 LTS。** 早期实现和验证使用原生 Ubuntu 26.04。
+当前流程在 WSL 中构建，通过 Windows 复制 BIN，再从 WSL 访问 CP2102。
+C2 固件本身仍是裸机程序；Ubuntu 运行在开发主机上。
 
 - 已准备好 RISC-V GCC 工具链及配置工具的 [xhive SDK](https://github.com/Zmmfly/xhive) 工作副本。
 - Xmake，以及 SDK 所需的 Python 配置依赖，包括 `kconfiglib`。
@@ -65,13 +66,14 @@ Hello World [SRAM/LTO v2] from xhive vendor: opencos / StarrySky C2!
 
 | 流程 | 约束 |
 | --- | --- |
-| 构建 | 已在 Ubuntu 26.04 上验证；示例命令使用 POSIX shell 和 `realpath` |
+| 构建 | 已在 Ubuntu 26.04 和 WSL2 / Ubuntu 24.04.5 上验证；示例命令使用 POSIX shell 和 `realpath` |
 | 烧录辅助任务 | 明确限制为 Linux；依赖 `lsblk`、`cp` 和 `sync -f` |
 | 串口监视与回显测试 | 已在 Linux 测试；测试脚本也接受 Windows COM 端口，仅在 POSIX 上请求独占打开 |
-| Windows 拖拽烧录 | 用户已确认通过 HFP-LINK 更新固件；不代表 Windows 构建或 Linux 辅助任务通过验证 |
-| 其他环境 | 其他 Linux 发行版、Windows、macOS 和 WSL 尚未验证本工程的完整工作流程 |
+| Windows 拖拽 / 复制烧录 | 早期拖拽已由用户确认；Windows PowerShell 复制 WSL 构建的 SRAM/LTO BIN 后，也已通过新启动标识确认更新 |
+| WSL USB 转发 | CP2102 访问可用；通过 USB/IP 直接执行 `xmake flash` 后仍运行旧固件 |
+| 其他环境 | 原生 Windows 构建、macOS 和其他 Linux 发行版尚未验证 |
 
-Ubuntu 26.04 是当前验证基准，不代表最低版本要求。烧录、逐字节回显和突发回显的
+已测试的 Ubuntu 版本不代表最低版本要求。烧录、逐字节回显和突发回显的
 验证结果分别记录，详见[验证状态与限制](#验证状态与限制)。
 构建前应完成 SDK 和 Python 环境配置，不要求使用任何特定用户的安装目录。
 
@@ -112,9 +114,32 @@ Flash 中的函数。仅将调用者放进 `.ramfunc` 不会自动搬移被调�
 C2 Pi 板卡通过物理模式开关选择 HFP-LINK 烧录模式或 UART 运行模式。
 烧录器存储卷和 CP2102 串口接口不能同时使用。
 
-用户已在 Windows 下将 BIN 拖到 `YSYX-HFPLnk`，成功更新了此前在 Flash 中执行的
-回显固件。可用这一已确认的方法烧录新的 `dist/c2_hello.bin`，随后切回 UART 运行
-模式并复位。等待启动问候语输出结束后再发送数据。
+Windows 拖拽已成功更新此前在 Flash 中执行的固件。本次通过 Windows PowerShell
+复制 WSL 构建的 `dist/c2_hello.bin`，也成功更新了 SRAM/LTO 固件：`STATE.TXT`
+显示 `write successful !!!`，复位后开发板输出了 `[SRAM/LTO v2]`。
+等待启动问候语输出结束后再发送数据。
+
+### WSL 构建、Windows 复制、WSL 串口
+
+1. 按上文命令在 WSL 中构建，然后选择 HFP-LINK 烧录模式。
+2. 暂停 HFP-LINK 的 WSL 自动连接。在 Windows PowerShell 中执行 `usbipd list`，
+   找到烧录器，再用实际 BUSID 执行 `usbipd detach --busid 2-1`。
+   设备连接到 WSL 时，Windows 无法同时访问它。
+3. 在 Windows 资源管理器中打开工程的 `dist` 目录。本次工作副本的路径为
+   `\\wsl.localhost\Ubuntu-24.04\home\zmmfly\repos\starrysky_c2_hello\dist`。
+   将 `c2_hello.bin` 复制到标签为 `YSYX-HFPLnk` 的 Windows 存储卷。
+   本次盘符为 `D:`；应核对卷标，不要假定盘符固定。
+4. 等待复制和烧录器活动结束，再检查 `STATE.TXT`。本次测试执行一次 Windows
+   `Copy-Item`，随后对文件执行 `Flush(true)`，没有自动操作鼠标拖拽。
+   文件大小为 476 字节，未填充或添加镜像头。
+5. 切换到 UART 运行模式，再次执行 `usbipd list`。若 CP2102 尚未连接 WSL，
+   使用实际发行版名称和 BUSID 执行 `usbipd attach --wsl Ubuntu-24.04 --busid 2-1`。
+   在 WSL 中打开 `xmake monitor`，然后按 RST，捕获只输出一次的 `[SRAM/LTO v2]` 标语。
+6. 关闭监视器，再执行下文的回显测试。烧录成功不代表回显测试通过。
+
+USB 连接行为见 [Microsoft WSL USB 文档](https://learn.microsoft.com/en-us/windows/wsl/connect-usb)。
+
+### Linux 复制辅助任务
 
 下述 Linux 辅助任务在当前设备上**尚未确认更新成功**。复制完成或主机侧文件哈希
 一致，不属于 Flash 回读验证。
@@ -180,31 +205,46 @@ python3 -m unittest discover -s tests -p test_echo_cli.py -v
 
 | 检查项 | 状态 |
 | --- | --- |
-| 主机环境 | Linux / Ubuntu 26.04 |
-| 固件构建 | 已使用 xPack RISC-V GCC 15.2.0 验证通过 |
+| 主机环境 | 原生 Ubuntu 26.04；当前 WSL2 / Ubuntu 24.04.5，内核 `6.6.87.2-microsoft-standard-WSL2` |
+| 固件构建 | 两种主机环境均使用 xPack RISC-V GCC 15.2.0 验证通过；WSL 生成 476 字节 BIN |
 | 主机回显测试脚本 | 模拟端口检查通过：逐字节/突发模式、错误拒绝和 Windows 参数选择；不是固件仿真 |
 | 早期仅 Hello 固件 | 已在 C2 实板观察到 SYS_UART 发送输出 |
-| Windows HFP-LINK 更新 | 用户已确认运行 Flash 版本的回显固件及其启动问候语 |
+| Windows HFP-LINK 更新 | 早期 Flash 固件由用户确认；本次 SRAM/LTO BIN 经 Windows 复制后，已在 WSL 捕获新启动标语 |
 | Flash 版本回显实板运行 | 273 字节逐字节测试通过；Windows 报告的突发丢字也已在 Linux 复现 |
-| SRAM/LTO 修订候选 | 构建及反汇编检查通过；Ubuntu 烧录后复位仍输出旧版启动标语 |
+| WSL 直接复制到 HFP-LINK | 两次复制和同步通过；`STATE.TXT` 保持默认提示，复位后仍输出旧标语 |
+| SRAM/LTO 实板运行 | Windows 复制后已确认新标语；逐字节和突发测试失败 |
 | 独立 Flash 回读 | 未执行 |
 | OpenOCD/GDB 硬件调试 | 本工程尚无经过验证的流程 |
 
 Flash 版本固件在 Linux 实板检查中，整串 `Hello` 完整回显为 1/5 次，`Hello\r\n`
 为 0/5 次；字节间增加 1 ms 间隔后，`Hello` 为 5/5 次完整。115200 8N1 连续帧约每
-86.8 微秒到达一字节。当前怀疑 Flash 取指延迟和可能的 TX 总线等待拖延了 RX 处理；
-需要对 SRAM/LTO 修订进行实板前后对照，才能确认原因。
+86.8 微秒到达一字节。此前怀疑 Flash 取指延迟和可能的 TX 总线等待拖延了 RX 处理。
+下文 SRAM/LTO 实板测试仍有失败，说明此修改尚未实现可靠回显，根因仍未确定。
 
-最近一次 Ubuntu 26.04 尝试中，`xmake flash` 对 476 字节的诊断 BIN 完成了两次复制
+此前 Ubuntu 26.04 尝试中，`xmake flash` 对 476 字节的诊断 BIN 完成了两次复制
 和文件系统同步；挂载文件与本地镜像哈希相同，`STATE.TXT` 仍保持默认提示。
 先打开串口再按 RST 后，开发板仍输出不含 `[SRAM/LTO v2]` 的旧标语。这确认了板上
 仍在运行旧固件，此前观察到的回显失败不能用于评价 SRAM/LTO 修订候选。
 
-烧录失败的原因仍未确定。这些观察说明当前 Ubuntu/HFP-LINK 更新流程存在问题，
-不能确定其具体原因，也不能泛化为 Ubuntu 均不兼容。主机文件哈希不属于独立 Flash
-回读。后续使用 Windows 拖拽方式继续对照，先确认新启动标识，再运行逐字节和突发
-测试。换主机重新构建前，应同时更新 xhive 和本工程；完整 Windows 构建及测试流程
-尚未验证。
+2026-09-13 的 WSL 验证使用应用版本 `0e6d457`、SDK 版本 `bb3d500` 和
+usbipd-win 5.3.0。`xmake f -y`、`xmake build -v c2_hello` 及
+`xmake flash --dry-run` 均通过。反汇编确认回显循环位于 `0x30000000`，没有回调
+Flash 中的函数。BIN 的 SHA-256 为
+`b08c33668ee0e7c77d83615d3bd9d864639a9f538e70c09dd28046efb3fbe089`。
+
+WSL 中直接执行 `xmake flash`，将镜像两次复制到 `/mnt/hfp-link/retrosoc_fw.bin`，
+每次同步，主机文件哈希一致。安全卸载后切换到 UART，先打开串口再按 RST，仍输出
+旧标语。随后 Windows 将同一 BIN 单次复制为 `D:\c2_hello.bin`，`STATE.TXT` 变为
+`write successful !!!`；再次复位后，通过 `/dev/ttyUSB0` 以 115200 8N1、无流控
+捕获到完整新标语，确认此设备上的 Windows 复制流程可用。两次尝试的目标文件名和
+复制次数也不同，因此尚不能据此单独确定 Linux 失败的原因。未执行独立 Flash 回读。
+
+在已确认运行的 SRAM/LTO 固件上，`python3 tests/test_echo.py /dev/ttyUSB0`
+于字节索引 14（`t`）失败，超时前未收到字节。单独执行 `--mode byte` 时，
+于索引 74（`9`）失败，同样未收到字节。单独执行 `--mode burst` 时，
+第 4 个 5 字节数据包失败，`Hello` 回显为 `Helo`。
+主机测试脚本自身的 `python3 -m unittest discover -s tests -p test_echo_cli.py -v`
+共 5 项检查通过。烧录已验证，SRAM/LTO 可靠回显问题仍未解决。
 
 SYS_UART 没有公开的软件可读 TX 完成标志。寄存器写入成功，不表示最后一个停止位已经
 在线路上发送完毕。本示例没有软件接收缓冲区或流控，不保证持续满速通信不丢数据。

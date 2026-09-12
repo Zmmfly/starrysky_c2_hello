@@ -24,8 +24,8 @@ Binary values, including `0x00` and `0xFF`, are handled as bytes.
 
 The echo loop runs in internal SRAM (`.ramfunc`), with LTO enabled to inline
 the UART calls. This avoids Flash XIP fetches on the receive/transmit hot path
-without adding interrupts or queues. It is a candidate mitigation for the
-burst-loss issue described below, pending a new hardware test.
+without adding interrupts or queues. Hardware testing has confirmed that this
+build runs, but byte and burst tests still lose data; see the results below.
 
 Startup output:
 
@@ -55,9 +55,10 @@ it does not reconfigure the hardware clock.
 
 ## Requirements
 
-**Current host environment: Linux / Ubuntu 26.04.** Implementation, firmware
-builds, and host-side software checks were performed in this environment.
-The C2 firmware itself remains bare-metal; Ubuntu runs on the development host.
+**Current host environment: WSL2 / Ubuntu 24.04.5 LTS.** Earlier implementation
+and validation used native Ubuntu 26.04. The current workflow builds in WSL,
+copies the BIN through Windows, and accesses CP2102 from WSL. The C2 firmware
+itself remains bare-metal; Ubuntu runs on the development host.
 
 - An [xhive SDK](https://github.com/Zmmfly/xhive) checkout with its RISC-V GCC
   toolchain and configuration tools available.
@@ -70,14 +71,15 @@ The C2 firmware itself remains bare-metal; Ubuntu runs on the development host.
 
 | Workflow | Constraint |
 | --- | --- |
-| Build | Verified on Ubuntu 26.04; examples use a POSIX shell and `realpath` |
+| Build | Verified on Ubuntu 26.04 and WSL2 / Ubuntu 24.04.5; examples use a POSIX shell and `realpath` |
 | Programming helper | Explicitly restricted to Linux; depends on `lsblk`, `cp`, and `sync -f` |
 | Serial monitor and echo test | Tested on Linux; the test also accepts Windows COM ports and only requests exclusive-open support on POSIX |
-| Windows drag-and-drop | User confirmed a firmware update through HFP-LINK; this does not validate a Windows build or the Linux helper |
-| Other environments | Other Linux distributions, Windows, macOS, and WSL have not been validated for this project's complete workflow |
+| Windows drag-and-drop / copy | Earlier user-confirmed drag-and-drop; Windows PowerShell copy of the WSL-built SRAM/LTO BIN also confirmed by its new boot marker |
+| WSL USB forwarding | CP2102 access works; direct `xmake flash` through USB/IP left the old firmware running |
+| Other environments | Native Windows builds, macOS, and other Linux distributions remain unverified |
 
-Ubuntu 26.04 is the current verification baseline, not a declared minimum
-version. Programming, byte echo, and burst echo have separate verification
+The tested Ubuntu versions are not declared minimum versions.
+Programming, byte echo, and burst echo have separate verification
 results; see [Validation and Limitations](#validation-and-limitations).
 Prepare the SDK and Python environment before building; no user-specific
 installation directory is required.
@@ -123,10 +125,37 @@ On the C2 Pi board, the physical mode switch selects HFP-LINK/program mode or
 UART/run mode. The programmer volume and CP2102 serial interface are not
 available simultaneously.
 
-The user successfully updated the earlier Flash-executed echo firmware by
-dragging its BIN onto `YSYX-HFPLnk` in Windows. Use that confirmed method to
-program the new `dist/c2_hello.bin`, then switch to UART/run mode and reset.
-Wait until the startup greeting finishes before sending input.
+Windows drag-and-drop updated the earlier Flash-executed firmware. A Windows
+PowerShell copy of the WSL-built `dist/c2_hello.bin` has now also updated the
+SRAM/LTO firmware: `STATE.TXT` reported `write successful !!!`, and the board
+printed `[SRAM/LTO v2]` after reset. Wait until the greeting finishes before
+sending input.
+
+### WSL Build, Windows Copy, WSL Serial
+
+1. Build in WSL using the commands above, then select HFP-LINK/program mode.
+2. Pause any automatic WSL attachment of HFP-LINK. In Windows PowerShell, run
+   `usbipd list`, identify the programmer, and run `usbipd detach --busid 2-1`
+   using its actual BUSID. A device attached to WSL is unavailable to Windows.
+3. Open the project's `dist` directory in Windows Explorer. For this checkout,
+   it is `\\wsl.localhost\Ubuntu-24.04\home\zmmfly\repos\starrysky_c2_hello\dist`.
+   Copy `c2_hello.bin` to the Windows volume labeled `YSYX-HFPLnk`. The tested
+   drive letter was `D:`; check the label rather than assuming a drive letter.
+4. Wait for copying and programmer activity to finish, then inspect `STATE.TXT`.
+   This test used one Windows `Copy-Item` operation followed by a file
+   `Flush(true)`; it did not automate a mouse drag. The file was 476 bytes,
+   without padding or an added header.
+5. Switch to UART/run mode. Use `usbipd list` again and, if CP2102 is not already
+   attached, run `usbipd attach --wsl Ubuntu-24.04 --busid 2-1` with the actual
+   distribution and BUSID. Open `xmake monitor` in WSL, then press RST to capture
+   the one-time `[SRAM/LTO v2]` greeting.
+6. Close the monitor before running the echo test below. Programming success
+   does not imply that the echo tests pass.
+
+USB attachment behavior is described in the
+[Microsoft WSL USB guide](https://learn.microsoft.com/en-us/windows/wsl/connect-usb).
+
+### Linux Copy Helper
 
 The Linux helper below has **not** produced a confirmed firmware update on this
 setup. Copy success or a matching host-side hash is not Flash readback evidence.
@@ -201,13 +230,14 @@ python3 -m unittest discover -s tests -p test_echo_cli.py -v
 
 | Check | Status |
 | --- | --- |
-| Host environment | Linux / Ubuntu 26.04 |
-| Firmware build | Passed with xPack RISC-V GCC 15.2.0 |
+| Host environment | Native Ubuntu 26.04; current WSL2 / Ubuntu 24.04.5, kernel `6.6.87.2-microsoft-standard-WSL2` |
+| Firmware build | Passed with xPack RISC-V GCC 15.2.0 on both hosts; WSL generated a 476-byte BIN |
 | Host echo-test script | Mock-port checks passed for byte/burst modes, fault rejection, and Windows option selection; not firmware simulation |
 | Earlier Hello-only firmware | SYS_UART transmit output observed on a C2 board |
-| Windows HFP-LINK update | User confirmed the Flash-executed echo firmware and its startup greeting |
+| Windows HFP-LINK update | Earlier Flash firmware confirmed by the user; current SRAM/LTO BIN copied through Windows and its new startup greeting captured in WSL |
 | Flash-executed echo on hardware | 273 stop-and-wait bytes passed; burst loss reproduced on Linux as well as reported on Windows |
-| SRAM/LTO candidate | Built and disassembly checked; reset after Ubuntu programming still showed the old boot greeting |
+| WSL direct HFP-LINK copy | Two copies and synchronization passed; default `STATE.TXT` remained, and reset showed the old greeting |
+| SRAM/LTO hardware runtime | New greeting confirmed after Windows copy; byte and burst tests failed |
 | Independent Flash readback | Not performed |
 | OpenOCD/GDB hardware debugging | No workflow verified for this project |
 
@@ -215,23 +245,40 @@ With the Flash-executed firmware, a Linux hardware check received complete
 `Hello` replies in 1/5 attempts and complete `Hello\r\n` replies in 0/5 attempts.
 Adding a 1 ms interval between bytes gave 5/5 complete `Hello` replies. At
 115200 8N1, back-to-back frames arrive about every 86.8 microseconds. Flash fetch
-latency and possible TX bus stalls are suspected to delay RX servicing; the
-current SRAM/LTO change needs a before/after hardware comparison to confirm.
+latency and possible TX bus stalls were suspected to delay RX servicing.
+The SRAM/LTO hardware failures below show that this change does not establish
+reliable echo; the underlying cause remains undetermined.
 
-In the latest Ubuntu 26.04 attempt, `xmake flash` completed both copies and
+In the earlier Ubuntu 26.04 attempt, `xmake flash` completed both copies and
 filesystem synchronization for the 476-byte diagnostic BIN. Its mounted-file
 hash matched the local image, while `STATE.TXT` kept its default instruction.
 With the serial port open before RST, the board still printed the old greeting
 without `[SRAM/LTO v2]`. This confirms that the old firmware was still running;
-the previously observed echo failures do not evaluate the SRAM/LTO candidate.
+those earlier echo failures do not evaluate the SRAM/LTO candidate.
 
-The programming failure remains unresolved. These observations identify a
-failure in the tested Ubuntu/HFP-LINK update workflow, not its exact cause or a
-general Ubuntu incompatibility. Host file hashes are not independent Flash
-readback. Continue the comparison using Windows drag-and-drop, first confirm
-the new boot marker, and then run the byte and burst tests. Update both xhive
-and this project before rebuilding on the next host; a complete Windows build
-and test workflow has not yet been validated.
+On 2026-09-13, WSL validation used application revision `0e6d457`, SDK revision
+`bb3d500`, and usbipd-win 5.3.0. `xmake f -y`, `xmake build -v c2_hello`, and
+`xmake flash --dry-run` passed. Disassembly placed the echo loop at `0x30000000`
+with no calls back into Flash. The BIN SHA-256 was
+`b08c33668ee0e7c77d83615d3bd9d864639a9f538e70c09dd28046efb3fbe089`.
+
+Direct WSL `xmake flash` copied it twice to `/mnt/hfp-link/retrosoc_fw.bin`,
+synchronized each pass, and matched the host file hash. After cleanly unmounting,
+switching to UART, and pressing RST with the port open, the old greeting still
+appeared. Windows then copied the same BIN once as `D:\c2_hello.bin`;
+`STATE.TXT` changed to `write successful !!!`, and a subsequent reset produced
+the full new greeting through `/dev/ttyUSB0` at 115200 8N1 with no flow control.
+This confirms the Windows copy workflow on this setup. The two attempts also
+used different destination filenames and copy counts, so they do not isolate
+the cause of the Linux failure. No independent Flash readback was performed.
+
+On the confirmed SRAM/LTO firmware, `python3 tests/test_echo.py /dev/ttyUSB0`
+failed at byte index 14 (`t`), receiving no byte before timeout. A separate
+`--mode byte` run failed at index 74 (`9`), also receiving no byte. A separate
+`--mode burst` run failed on the fourth 5-byte burst: `Hello` became `Helo`.
+The host checker itself passed all 5 tests with
+`python3 -m unittest discover -s tests -p test_echo_cli.py -v`.
+Programming is verified; reliable SRAM/LTO echo remains unresolved.
 
 SYS_UART has no documented software-visible TX-complete flag. A register write
 does not prove that the last stop bit has left the wire. This example has no
