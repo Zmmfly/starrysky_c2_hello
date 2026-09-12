@@ -16,7 +16,7 @@
  */
 int main(void)
 {
-    static const uint8_t greeting[] = "Hello World from xhive Vendor StarrySky C2!\r\n";
+    static const uint8_t greeting[] = "Hello World from xhive vendor: opencos / StarrySky C2!\r\n";
     c2_sys_uart_t uart;
     size_t written;
 
