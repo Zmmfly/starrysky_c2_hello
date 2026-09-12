@@ -1,13 +1,14 @@
 add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
-
 includes(os.getenv("XHIVE_SDK_PATH"))
+
+set_targetdir("dist")
 
 target("c2_hello")
     set_kind("binary")
     set_languages("c11")
     add_rules("xhive.embed")
     add_files("src/main.c")
-    add_ldflags("-Wl,-Map=build/c2_hello.map", {force = true})
+    -- add_ldflags("-Wl,-Map=build/c2_hello.map", {force = true})
 target_end()
 
 task("flash")
@@ -70,8 +71,8 @@ task("flash")
         end
         local state = path.join(root, "STATE.TXT")
         assert(os.isfile(state), "HFP-LINK STATE.TXT is missing")
-        -- Use an 8.3 filename to avoid extra long-filename FAT entries.
-        local destination = path.join(root, "FIRMWARE.BIN")
+        -- Keep the filename used by the official ecos-flash tool.
+        local destination = path.join(root, "retrosoc_fw.bin")
         assert(not os.islink(state) and not os.islink(destination),
                "Programmer files must not be symbolic links")
         print("HFP-LINK: %s (%d bytes) -> %s", binary, size, destination)
@@ -79,15 +80,17 @@ task("flash")
             print("Dry run: no device writes performed.")
             return
         end
-        -- Do not copy source metadata or create a temporary file on the
-        -- emulated FAT volume. Closing then syncfs flushes data and metadata.
-        local image = assert(io.readfile(binary, {encoding = "binary"}))
-        assert(#image == size, "Firmware changed or could not be read completely")
-        local file = io.open(destination, "wb")
-        file:write(image)
-        file:flush()
-        file:close()
-        os.vrunv("sync", {"-f", root})
+        -- Match the official ecos-flash two-copy sequence. A single copy
+        -- completed on this board without replacing the running firmware.
+        -- Keep command failures visible and sync each pass before proceeding.
+        for pass = 1, 2 do
+            print("HFP-LINK copy pass %d/2", pass)
+            os.vrunv("cp", {"--", binary, destination})
+            os.vrunv("sync", {"-f", root})
+            if pass == 1 then
+                os.sleep(500)
+            end
+        end
         local status = (io.readfile(state) or ""):trim()
         print("STATE.TXT: %s", status)
         assert(not status:lower():find("fail") and not status:lower():find("error"),

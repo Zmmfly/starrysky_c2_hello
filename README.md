@@ -2,7 +2,9 @@
 
 Bare-metal SYS_UART example built with xhive. The board's CP2102 console uses
 115200 baud, 8 data bits, no parity, one stop bit, and no flow control. The
-application prints `Hello World from xhive / StarrySky C2!` about once per second.
+application prints `Hello World from xhive Vendor StarrySky C2!` once at startup,
+then echoes each received byte unchanged. There is no prefix, newline conversion,
+periodic output, timer delay, or software receive buffer in the echo loop.
 
 ## Build
 
@@ -19,9 +21,8 @@ in SRAM and is aligned to 16 bytes. External RAM and interrupts are not enabled.
 `CONFIG_STARRYSKY_C2_CLOCK_HZ=72000000` describes the fitted oscillator; changing
 the configuration does not change the hardware clock.
 
-The ELF and BIN are in the target directory reported by Xmake, currently
-`build/cross/x86_64/release/`. The `x86_64` directory component comes from Xmake's
-host configuration, not the firmware ISA. A link map is at `build/c2_hello.map`.
+The ELF and BIN are generated as `dist/c2_hello.elf` and `dist/c2_hello.bin`.
+Link-map generation is currently disabled in `xmake.lua`.
 
 ## Program and Run
 
@@ -30,8 +31,10 @@ SoC. The storage volume and the UART cannot be used at the same time.
 
 1. Select HFP-LINK/program mode and mount the `YSYX-HFPLnk` volume.
 2. Run `xmake flash --dry-run` to check the build and destination without writing.
-3. Run `xmake flash`. It builds the firmware, writes `FIRMWARE.BIN`, flushes the
-   filesystem, and displays `STATE.TXT`. Multiple connected programmers require
+3. Run `xmake flash`. It builds the firmware and copies it as `retrosoc_fw.bin`
+   twice with a 0.5-second pause, synchronizes each pass, and displays `STATE.TXT`.
+   This follows the official `ecos-flash` two-copy sequence but does not suppress
+   copy errors. Multiple connected programmers require
    `--mount=/path/to/YSYX-HFPLnk`. This board-local task currently supports Linux.
 4. Wait for programmer activity to stop, then switch to UART/run mode and reset
    the board. The storage volume disappears and CP2102 enumerates as a serial port.
@@ -39,7 +42,24 @@ SoC. The storage volume and the UART cannot be used at the same time.
 
 The monitor needs Python 3 and `pyserial`. On this machine pyserial is already
 installed. Device permissions must allow the current user to open the serial
-port. A late connection is fine because the greeting repeats.
+port. Reset after opening the monitor to see the startup greeting; echo also
+works when the monitor connects later. Keep the terminal's local echo disabled
+to avoid displaying both locally typed and board-echoed characters.
+
+## Echo Check
+
+After programming the new firmware, switch to UART/run mode and press RST.
+Close any serial monitor before running the byte-for-byte test:
+
+```sh
+python3 tests/test_echo.py /dev/ttyUSB0
+```
+
+The test uses pyserial with an exclusive Linux serial-port open and sends text,
+CR/LF, and all 256 byte values. It waits for each echoed byte before sending the
+next and fails on a mismatch, timeout, or trailing data. This is a basic
+bidirectional test, not a sustained-throughput qualification. Data sent during
+startup is not covered; wait for the greeting or allow startup to finish first.
 
 Copy completion and `sync` confirm host-side writes, not independent Flash
 readback. This HFP-LINK firmware initially exposes only a default instruction in
@@ -74,6 +94,11 @@ uses RV32IMC, without atomics. Official SDK examples use the RV32IM subset.
 
 ## Validation
 
+### Hello-Only Baseline
+
+The following results apply to the previously tested periodic-Hello firmware,
+not to the new echo loop:
+
 - Built and linked with xPack RISC-V GCC 15.2.0; BIN size: 3216 bytes.
 - ELF inspection: RV32IMC, soft-float ILP32, reset entry `0x00000000`, initial
   stack pointer `0x30000400`, and no A extension in the linked ISA attributes.
@@ -84,6 +109,25 @@ uses RV32IMC, without atomics. Official SDK examples use the RV32IM subset.
   CP2102 (`10c4:ea60`) appeared as `/dev/ttyUSB0`. An 8-second capture at 115200
   8N1 received 320 bytes containing 8 complete greetings, each terminated by
   CRLF, with no unexpected bytes. The serial port was closed after verification.
+
+### Echo Firmware
+
+- Current firmware built and linked with xPack RISC-V GCC 15.2.0; BIN size:
+  768 bytes. The revised startup greeting has not been programmed or tested
+  on the board.
+- Checked the host test script against a pseudo-terminal: correct echo passes;
+  corrupted, missing, and trailing bytes fail. This does not exercise the SoC.
+- Earlier programming attempts used a 764-byte echo image with the previous
+  startup greeting. Single-copy attempts left the old periodic-Hello firmware
+  running, and the echo test correctly failed. The
+  two-copy attempt using `FIRMWARE.BIN` also left the old firmware running.
+  Using the official filename (`retrosoc_fw.bin`) and two-copy sequence also
+  failed to activate echo. A requested power cycle produced an observed CP2102
+  disconnect/reconnect, but the test still received the old Hello output.
+- Host-side target-file size and SHA-256 matched that 764-byte test BIN, but
+  this is not independent Flash readback. Programming activation remains
+  unresolved; hardware echo has not passed.
+- No sustained-throughput or receive-overrun guarantees are made for SYS_UART.
 
 The SDK regression check can be run from the xhive repository:
 
