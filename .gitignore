@@ -1,6 +1,7 @@
 # For build artifacts
 build/
 dist/
+__pycache__/
 
 # For IDEs and editors
 .vscode/

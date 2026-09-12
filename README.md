@@ -22,11 +22,19 @@ polling, with no RTOS, interrupts, timer delays, or software receive queue.
 After the startup greeting, echo data has no added prefix or newline conversion.
 Binary values, including `0x00` and `0xFF`, are handled as bytes.
 
+The echo loop runs in internal SRAM (`.ramfunc`), with LTO enabled to inline
+the UART calls. This avoids Flash XIP fetches on the receive/transmit hot path
+without adding interrupts or queues. It is a candidate mitigation for the
+burst-loss issue described below, pending a new hardware test.
+
 Startup output:
 
 ```text
-Hello World from xhive vendor: opencos / StarrySky C2!
+Hello World [SRAM/LTO v2] from xhive vendor: opencos / StarrySky C2!
 ```
+
+The `[SRAM/LTO v2]` marker distinguishes this diagnostic build from the earlier
+firmware. Open the serial monitor before resetting to capture the one-time line.
 
 The checked-in [.config](.config) selects:
 
@@ -39,6 +47,7 @@ The checked-in [.config](.config) selects:
 | Internal SRAM | 128 KiB at `0x30000000` |
 | Stack | 1 KiB in internal SRAM, aligned to 16 bytes |
 | External RAM | Disabled |
+| Execution | `CONFIG_ENABLE_EXEC_IN_RAM=y`, `CONFIG_COMPILER_ENABLE_LTO=y` |
 | Startup and linker script | xhive default templates |
 
 `CONFIG_STARRYSKY_C2_CLOCK_HZ` describes the actual oscillator frequency; changing
@@ -63,12 +72,13 @@ The C2 firmware itself remains bare-metal; Ubuntu runs on the development host.
 | --- | --- |
 | Build | Verified on Ubuntu 26.04; examples use a POSIX shell and `realpath` |
 | Programming helper | Explicitly restricted to Linux; depends on `lsblk`, `cp`, and `sync -f` |
-| Serial monitor and echo test | Implemented for the current Linux setup; require serial-device access, and the test uses POSIX exclusive-open support |
+| Serial monitor and echo test | Tested on Linux; the test also accepts Windows COM ports and only requests exclusive-open support on POSIX |
+| Windows drag-and-drop | User confirmed a firmware update through HFP-LINK; this does not validate a Windows build or the Linux helper |
 | Other environments | Other Linux distributions, Windows, macOS, and WSL have not been validated for this project's complete workflow |
 
 Ubuntu 26.04 is the current verification baseline, not a declared minimum
-version. Linux host support does not mean HFP-LINK programming or hardware echo
-has passed; see [Validation and Limitations](#validation-and-limitations).
+version. Programming, byte echo, and burst echo have separate verification
+results; see [Validation and Limitations](#validation-and-limitations).
 Prepare the SDK and Python environment before building; no user-specific
 installation directory is required.
 
@@ -101,15 +111,25 @@ padding is added. Link-map generation is currently disabled in `xmake.lua`.
 `build/`, `dist/`, `.xmake/`, and `.vscode/` are generated directories excluded
 from version control.
 
+Use an SDK revision that retains `Reset_Handler` under LTO (`used` attribute in
+`templates/startup_riscv.c`). Startup copies `.ram_text` from Flash to SRAM before
+calling `main`. When changing the compiler or drivers, inspect the ELF's
+`.ram_text` disassembly: the echo loop must not call back into Flash. Placing a
+caller in `.ramfunc` does not automatically move its callees.
+
 ## Program and Run
 
 On the C2 Pi board, the physical mode switch selects HFP-LINK/program mode or
 UART/run mode. The programmer volume and CP2102 serial interface are not
 available simultaneously.
 
-> Programming has not been validated as a successful update path on the tested
-> setup. A completed copy or matching host-side file hash does not establish
-> that the new firmware is present in Flash or running on the board.
+The user successfully updated the earlier Flash-executed echo firmware by
+dragging its BIN onto `YSYX-HFPLnk` in Windows. Use that confirmed method to
+program the new `dist/c2_hello.bin`, then switch to UART/run mode and reset.
+Wait until the startup greeting finishes before sending input.
+
+The Linux helper below has **not** produced a confirmed firmware update on this
+setup. Copy success or a matching host-side hash is not Flash readback evidence.
 
 1. Select HFP-LINK/program mode and mount the volume labeled `YSYX-HFPLnk`.
 2. Run `xmake flash --dry-run` to build and validate the destination without
@@ -148,20 +168,34 @@ After the new firmware has started, close other serial monitors and run:
 python3 tests/test_echo.py /dev/ttyUSB0
 ```
 
-The test opens the port exclusively at 115200 8N1 with flow control off, consumes
-any initial output, then sends text, CR/LF, and every value from `0x00` through
-`0xFF`. It waits for each echoed byte before sending the next. A mismatch,
-timeout, or trailing byte causes failure.
+The test uses 115200 8N1 with flow control off and consumes initial output.
+By default it checks both modes:
+
+- `byte`: 273 bytes, waiting for each echo before sending the next.
+- `burst`: send `Hello`, `Hello\r\n`, `0123456789`, and all 256 byte values as
+  whole writes, each repeated 20 times. Wait for the complete echo between
+  bursts, not between their bytes.
+
+A mismatch, timeout, short write, or trailing byte causes failure. Use
+`--mode byte` or `--mode burst` to isolate a mode, and `--repeat 100` for more
+burst repetitions. On Windows, use `python tests/test_echo.py COM3`, replacing
+`COM3` with the actual device; the POSIX-only exclusive flag is omitted.
 
 Expected output on a successful test:
 
 ```text
-PASS: 273 bytes echoed exactly at 115200 8N1
+PASS: 273 stop-and-wait bytes at 115200 8N1
+PASS: 80 bursts (5, 7, 10, 256 bytes) at 115200 8N1
 Coverage: text, CR/LF, and every byte from 0x00 through 0xff
 ```
 
-This is a basic bidirectional test, not a sustained-throughput or FIFO-capacity
-test. Data sent during the startup greeting is not covered.
+Finite bursts are not a sustained-throughput or FIFO-capacity qualification.
+Data sent during the startup greeting is not covered. The checker itself can
+be tested without hardware:
+
+```sh
+python3 -m unittest discover -s tests -p test_echo_cli.py -v
+```
 
 ## Validation and Limitations
 
@@ -169,24 +203,41 @@ test. Data sent during the startup greeting is not covered.
 | --- | --- |
 | Host environment | Linux / Ubuntu 26.04 |
 | Firmware build | Passed with xPack RISC-V GCC 15.2.0 |
-| Host echo-test script | Pseudo-terminal checks passed for correct echo and rejection of corrupted, missing, and trailing bytes |
+| Host echo-test script | Mock-port checks passed for byte/burst modes, fault rejection, and Windows option selection; not firmware simulation |
 | Earlier Hello-only firmware | SYS_UART transmit output observed on a C2 board |
-| Echo firmware on hardware | Not validated; earlier programming attempts left the old periodic-Hello firmware running |
+| Windows HFP-LINK update | User confirmed the Flash-executed echo firmware and its startup greeting |
+| Flash-executed echo on hardware | 273 stop-and-wait bytes passed; burst loss reproduced on Linux as well as reported on Windows |
+| SRAM/LTO candidate | Built and disassembly checked; reset after Ubuntu programming still showed the old boot greeting |
 | Independent Flash readback | Not performed |
 | OpenOCD/GDB hardware debugging | No workflow verified for this project |
 
-The current startup-greeting revision has been built, but not hardware-tested.
-Earlier attempts included single-copy and two-copy programming, alternative
-filenames, and an observed USB disconnect/reconnect after a requested power
-cycle. These did not establish a successful firmware update. `STATE.TXT` retaining
-its default instruction is not a positive result; host caching also limits
-conclusions drawn from file reads. The cause remains unresolved.
+With the Flash-executed firmware, a Linux hardware check received complete
+`Hello` replies in 1/5 attempts and complete `Hello\r\n` replies in 0/5 attempts.
+Adding a 1 ms interval between bytes gave 5/5 complete `Hello` replies. At
+115200 8N1, back-to-back frames arrive about every 86.8 microseconds. Flash fetch
+latency and possible TX bus stalls are suspected to delay RX servicing; the
+current SRAM/LTO change needs a before/after hardware comparison to confirm.
+
+In the latest Ubuntu 26.04 attempt, `xmake flash` completed both copies and
+filesystem synchronization for the 476-byte diagnostic BIN. Its mounted-file
+hash matched the local image, while `STATE.TXT` kept its default instruction.
+With the serial port open before RST, the board still printed the old greeting
+without `[SRAM/LTO v2]`. This confirms that the old firmware was still running;
+the previously observed echo failures do not evaluate the SRAM/LTO candidate.
+
+The programming failure remains unresolved. These observations identify a
+failure in the tested Ubuntu/HFP-LINK update workflow, not its exact cause or a
+general Ubuntu incompatibility. Host file hashes are not independent Flash
+readback. Continue the comparison using Windows drag-and-drop, first confirm
+the new boot marker, and then run the byte and burst tests. Update both xhive
+and this project before rebuilding on the next host; a complete Windows build
+and test workflow has not yet been validated.
 
 SYS_UART has no documented software-visible TX-complete flag. A register write
 does not prove that the last stop bit has left the wire. This example has no
 software receive buffer or flow control, and makes no guarantee of lossless
-continuous full-rate traffic. Neither simulated tests nor the older Hello-only
-result constitute hardware validation of echo.
+continuous full-rate traffic. A successful byte test does not validate bursts,
+and host checker tests do not validate the firmware.
 
 ## References
 
