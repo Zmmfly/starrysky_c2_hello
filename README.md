@@ -50,8 +50,8 @@ it does not reconfigure the hardware clock.
 builds, and host-side software checks were performed in this environment.
 The C2 firmware itself remains bare-metal; Ubuntu runs on the development host.
 
-- An xhive SDK checkout with its RISC-V GCC toolchain and configuration tools
-  available.
+- An [xhive SDK](https://github.com/Zmmfly/xhive) checkout with its RISC-V GCC
+  toolchain and configuration tools available.
 - Xmake and the SDK's Python configuration dependencies, including `kconfiglib`.
 - Python 3 with `pyserial` for the serial monitor and echo test.
 - Linux with `lsblk`, `cp`, and `sync` for the board-local programming task.

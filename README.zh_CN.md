@@ -47,7 +47,7 @@ Hello World from xhive vendor: opencos / StarrySky C2!
 **当前主机环境：Linux / Ubuntu 26.04。** 本工程的实现、固件构建及主机侧软件检查
 均在该环境下完成。C2 固件本身仍是裸机程序；Ubuntu 运行在开发主机上。
 
-- 已准备好 RISC-V GCC 工具链及配置工具的 xhive SDK 工作副本。
+- 已准备好 RISC-V GCC 工具链及配置工具的 [xhive SDK](https://github.com/Zmmfly/xhive) 工作副本。
 - Xmake，以及 SDK 所需的 Python 配置依赖，包括 `kconfiglib`。
 - Python 3 和 `pyserial`，用于串口监视器及回显测试。
 - Linux，以及 `lsblk`、`cp`、`sync`，用于工程内的板级烧录任务。
