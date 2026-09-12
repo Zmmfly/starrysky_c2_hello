@@ -1,0 +1,13 @@
+# For build artifacts
+build/
+dist/
+
+# For IDEs and editors
+.vscode/
+
+# For Xmake
+.xmake/
+
+
+# For config
+.config.old
