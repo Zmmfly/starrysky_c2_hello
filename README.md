@@ -1,6 +1,6 @@
 # StarrySky C2 示例
 
-基于 xhive SDK 的 StarrySky C2 裸机示例与实板验证记录。示例按目录组织，
+基于 xhive SDK 的 StarrySky C2 嵌入式示例与验证记录。示例按目录组织，
 各自保存源码、构建配置、测试和使用文档。
 
 ## 示例目录
@@ -8,6 +8,7 @@
 | 目录 | 内容 | 使用文档 |
 | --- | --- | --- |
 | [ex.hello/](ex.hello/) | 启动时输出 Hello World，随后通过 SYS_UART 逐字节回显 | [中文](ex.hello/README.zh_CN.md) · [English](ex.hello/README.md) |
+| [ex.rtthread/](ex.rtthread/) | RT-Thread Nano、SYS_UART 控制台与 PicoRV32 抢占端口；参考 RTL 仿真通过，实板中断探测受阻 | [说明](ex.rtthread/README.md) |
 
 原先位于仓库根目录的 Hello / Echo 工程已移到 `ex.hello/`。
 构建、烧录和测试命令均在该示例目录中执行；示例文档中的“工程根目录”也指该目录。
