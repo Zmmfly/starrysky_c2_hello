@@ -21,10 +21,17 @@ xmake build c2_rtthread
 ```
 
 产物：`dist/c2_rtthread.elf`、`dist/c2_rtthread.bin`；链接映射：`build/c2_rtthread.map`。
-本次使用 xhive `bb3d500`、xPack RISC-V GCC 15.2.0，BIN 17,764 字节，
-RAM 占用 22,336 字节（含 16 KiB 静态堆与 4 KiB 启动栈）。没有修改 SDK 源文件。
-`xmake.lua` 复用 SDK 的 Nano 内核和 `rtconfig.h` 生成器，替换本工程的 Nano
-目标源文件选择，以接入本地 CPU/板级代码与 MSH。
+需要包含 `RTTNANO_RISCV_PORT_CUSTOM` 选项的 xhive SDK（从 `f2886db` 引入）。
+本次使用该版本与 xPack RISC-V GCC 15.2.0；BIN 17,764 字节，RAM 占用
+22,336 字节（含 16 KiB 静态堆与 4 KiB 启动栈）。
+
+在 `xmake menuconfig` 的 `Third-party configurations` 中选择 `RT-Thread Nano`，
+再在 `RT-Thread Nano configurations → RISC-V port implementation` 中选择
+`Application-provided RISC-V port`。本例 `.config` 已启用
+`CONFIG_RTTNANO_RISCV_PORT_CUSTOM=y`。
+SDK 负责 Nano 内核、MSH 和 `rtconfig.h` 生成，跳过内置 `libcpu` 和 `port` 源码；
+工程通过普通的 `add_files("src/*.c", "src/*.S")` 编译本地 CPU/板级端口，
+不再覆盖 SDK target。标准 RISC-V 端口仍为 SDK 默认选项。
 
 ## 运行行为
 
